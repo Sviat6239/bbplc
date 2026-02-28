@@ -54,10 +54,14 @@ def tostr(name):
     count = tostr_counter.get(name, 0)
     tostr_counter[name] = count + 1
     buf = safe_name(f"{name}_str_{count}")
+    len_var = safe_name(f"{buf}_len")  # переменная длины
 
+    # создаём буфер только один раз
     if buf not in variables:
-        tostr_buffers.append(f"{buf}: times 20 db 0    ; buffer for TOSTR {name} (instance {count})")
+        declares.append(f"{buf}: times 20 db 0    ; buffer for TOSTR {name} (instance {count})")
+        declares.append(f"{len_var}: dd 0         ; длина строки {buf}")
         variables[buf] = "tostr_buffer"
+        variables[len_var] = 0
 
     asm_lines.append(f"; --- TOSTR {name} → {buf} ---")
     asm_lines.append(f"mov eax, [{safe_name(name)}]")
@@ -74,18 +78,23 @@ def tostr(name):
     asm_lines.append(f"inc ecx")
     asm_lines.append(f"test eax, eax")
     asm_lines.append(f"jnz .tostr_loop_{name}_{count}")
-    asm_lines.append(f"; result: ecx = длина, edi = начало строки (без ведущих нулей)")
+    asm_lines.append(f"mov [{len_var}], ecx ; сохраняем длину строки")
 
 def toint(name):
-    count = tostr_counter.get(name, 0) - 1
-    if count < 0:
+    # берём последний созданный буфер
+    if name not in buffers_created or not buffers_created[name]:
         count = 0
         print(f"Warning: TOINT {name} без предшествующего TOSTR — используется буфер {name}_str_0")
+    else:
+        count = buffers_created[name][-1]
 
     buf = safe_name(f"{name}_str_{count}")
+    length_var = safe_name(f"{buf}_len")
 
+    # создаём буфер fallback если нет
     if buf not in variables:
-        tostr_buffers.append(f"{buf}: times 20 db 0    ; buffer for TOINT {name} (fallback)")
+        declares.append(f"{buf}: times 20 db 0    ; buffer for TOINT {name} (fallback)")
+        declares.append(f"{length_var}: dd 0")
         variables[buf] = "toint_buffer"
 
     asm_lines.append(f"; --- TOINT {name} ← {buf} ---")
@@ -107,19 +116,32 @@ def toint(name):
     asm_lines.append(f".toint_done_{name}_{count}:")
     asm_lines.append(f"mov [{safe_name(name)}], eax")
 
-def print_var(name):
+def print_var(name, is_number=False):
     name = safe_name(name)
-    value = variables.get(name, "")
-    asm_lines.append("mov eax, 4")
-    asm_lines.append("mov ebx, 1")
-    asm_lines.append(f"mov ecx, {name}")
-    
-    if isinstance(value, str) and ',' in value:
-        length = len([b for b in value.split(',') if b.strip() != ''])
+
+    if is_number:
+        count = tostr_counter.get(name, 0) - 1
+        if count < 0:
+            count = 0
+        buf = safe_name(f"{name}_str_{count}")
+        length_var = safe_name(f"{buf}_len")
+
+        asm_lines.append("mov eax, 4")
+        asm_lines.append("mov ebx, 1")
+        asm_lines.append(f"lea ecx, [{buf}]")
+        asm_lines.append(f"mov edx, [{length_var}]")
+        asm_lines.append("int 0x80")
     else:
-        length = 4
-    asm_lines.append(f"mov edx, {length}")
-    asm_lines.append("int 0x80")
+        value = variables.get(name, "")
+        asm_lines.append("mov eax, 4")
+        asm_lines.append("mov ebx, 1")
+        asm_lines.append(f"mov ecx, {name}")
+        if isinstance(value, str) and ',' in value:
+            length = len([b for b in value.split(',') if b.strip() != ''])
+        else:
+            length = 4
+        asm_lines.append(f"mov edx, {length}")
+        asm_lines.append("int 0x80")
 
 def add(op1, op2):
     asm_lines.append(f"mov eax, [{op1}]")
@@ -217,10 +239,13 @@ for line in code:
             buffers_created[name].append(buf_index)
 
         buf_name = f"{name}_str_{buf_index}"
+        len_name = f"{buf_name}_len"
 
         if buf_name not in variables:
             declares.append(f"{buf_name}: times 20 db 0 ; buffer for {name}")
+            declares.append(f"{len_name}: dd 0 ; length of {buf_name}")
             variables[buf_name] = "tostr_buffer"
+            variables[len_name] = 0
 
 asm_lines.extend(declares)
 asm_lines.append("start:")
