@@ -1,38 +1,69 @@
+import re
+
 grammar = ["DECLARE", "PRINT", "ADD", "SUB", "MUL","DIV","SQR","POW", "IF", "THEN", "ELSE", "ENDIF", "TOSTR", "TOINT", "LABEL","GOTO"]
 dataTypes = ["DB", "DW", "DD", "DP", "DQ", "DT"]
 
 variables = {}
-asm_lines = ["format ELF executable 4", "", "entry start", "", "start:"]
+declares = []
+asm_lines = ["format ELF executable 4", "entry start", ""]
 
+buffers_created = {}
 tostr_counter = {}
+tostr_buffers = []
+RESERVED_NAMES = {"str", "eax", "ebx", "ecx", "edx", "esi", "edi"}
+
+def safe_name(name):
+    if name in RESERVED_NAMES:
+        return f"var_{name}"
+    return name
+
+def parse_declare(line):
+    m = re.match(r'DECLARE\s+(\w+)\s+(\w+)\s*=\s*(.+)', line)
+    if not m:
+        print(f"Ошибка разбора DECLARE: {line}")
+        return None, None, None
+    var_type, var_name, var_value = m.groups()
+    var_value = var_value.strip()
+    
+    if var_value.startswith("'") and var_value.endswith("'"):
+        var_value = var_value[1:-1]
+        var_value = ', '.join(str(ord(c)) for c in var_value) + ", 0"
+        var_type = "DB"
+    return var_type, var_name, var_value
 
 def declare(type, name, value):
+    name = safe_name(name)
     variables[name] = value
+
     if type == "DB":
-        asm_lines.append(f"{name}: db {value}")
+        declares.append(f"{name}: db {value}")
     elif type == "DW":
-        asm_lines.append(f"{name}: dw {value}")
+        declares.append(f"{name}: dw {value}")
     elif type == "DD":
-        asm_lines.append(f"{name}: dd {value}")
-    elif type =="DP":
-        asm_lines.append(f"{name}: dp {value}")    
+        declares.append(f"{name}: dd {value}")
+    elif type == "DP":
+        declares.append(f"{name}: dp {value}")    
     elif type == "DQ":
-        asm_lines.append(f"{name}: dq {value}")
+        declares.append(f"{name}: dq {value}")
     elif type == "DT":
-        asm_lines.append(f"{name}: dt {value}")
+        declares.append(f"{name}: dt {value}")  
     else:
-        print(f"Unknown type: {type}")       
+        print(f"Unknown type: {type}")
 
 def tostr(name):
     count = tostr_counter.get(name, 0)
     tostr_counter[name] = count + 1
-    buf = f"{name}_str_{count}"
-    asm_lines.append(f"{buf}: times 12 db 0 ; buffer for {name} TOSTR")
-    asm_lines.append(f"; --- TOSTR {name} ---")
-    asm_lines.append(f"mov eax, [{name}]")
-    asm_lines.append(f"lea edi, [{buf} + 12]")
-    asm_lines.append(f"xor ecx, ecx")
+    buf = safe_name(f"{name}_str_{count}")
 
+    if buf not in variables:
+        tostr_buffers.append(f"{buf}: times 20 db 0    ; buffer for TOSTR {name} (instance {count})")
+        variables[buf] = "tostr_buffer"
+
+    asm_lines.append(f"; --- TOSTR {name} → {buf} ---")
+    asm_lines.append(f"mov eax, [{safe_name(name)}]")
+    asm_lines.append(f"lea edi, [{buf} + 19]")
+    asm_lines.append(f"mov byte [edi], 0")
+    asm_lines.append(f"xor ecx, ecx")
     asm_lines.append(f".tostr_loop_{name}_{count}:")
     asm_lines.append(f"xor edx, edx")
     asm_lines.append(f"mov ebx, 10")
@@ -41,39 +72,54 @@ def tostr(name):
     asm_lines.append(f"dec edi")
     asm_lines.append(f"mov [edi], dl")
     asm_lines.append(f"inc ecx")
-    asm_lines.append(f"cmp eax, 0")
-    asm_lines.append(f"jne .tostr_loop_{name}_{count}")
-    asm_lines.append(f"; TO STR done, length in ecx, start at edi")
+    asm_lines.append(f"test eax, eax")
+    asm_lines.append(f"jnz .tostr_loop_{name}_{count}")
+    asm_lines.append(f"; result: ecx = длина, edi = начало строки (без ведущих нулей)")
 
 def toint(name):
     count = tostr_counter.get(name, 0) - 1
     if count < 0:
         count = 0
-    buf = f"{name}_str_{count}"
-    
-    asm_lines.append(f"; --- TOINT {name} ---")
+        print(f"Warning: TOINT {name} без предшествующего TOSTR — используется буфер {name}_str_0")
+
+    buf = safe_name(f"{name}_str_{count}")
+
+    if buf not in variables:
+        tostr_buffers.append(f"{buf}: times 20 db 0    ; buffer for TOINT {name} (fallback)")
+        variables[buf] = "toint_buffer"
+
+    asm_lines.append(f"; --- TOINT {name} ← {buf} ---")
     asm_lines.append(f"lea esi, [{buf}]")
-    asm_lines.append(f"mov ecx, 12")
     asm_lines.append(f"xor eax, eax")
+    asm_lines.append(f"xor ecx, ecx")
     asm_lines.append(f".toint_loop_{name}_{count}:")
-    asm_lines.append(f"cmp ecx, 0")
+    asm_lines.append(f"movzx ebx, byte [esi]")
+    asm_lines.append(f"cmp bl, 0")
     asm_lines.append(f"je .toint_done_{name}_{count}")
-    asm_lines.append(f"mov bl, [esi]")
     asm_lines.append(f"sub bl, '0'")
+    asm_lines.append(f"cmp bl, 9")
+    asm_lines.append(f"ja .toint_done_{name}_{count}")
     asm_lines.append(f"imul eax, eax, 10")
     asm_lines.append(f"add eax, ebx")
     asm_lines.append(f"inc esi")
-    asm_lines.append(f"dec ecx")
+    asm_lines.append(f"inc ecx")
     asm_lines.append(f"jmp .toint_loop_{name}_{count}")
     asm_lines.append(f".toint_done_{name}_{count}:")
-    asm_lines.append(f"mov [{name}], eax")
+    asm_lines.append(f"mov [{safe_name(name)}], eax")
 
 def print_var(name):
-    asm_lines.append(f"mov eax, 4")
-    asm_lines.append(f"mov ebx, 1")
+    name = safe_name(name)
+    value = variables.get(name, "")
+    asm_lines.append("mov eax, 4")
+    asm_lines.append("mov ebx, 1")
     asm_lines.append(f"mov ecx, {name}")
-    asm_lines.append(f"mov edx, 4")
-    asm_lines.append(f"int 0x80")
+    
+    if isinstance(value, str) and ',' in value:
+        length = len([b for b in value.split(',') if b.strip() != ''])
+    else:
+        length = 4
+    asm_lines.append(f"mov edx, {length}")
+    asm_lines.append("int 0x80")
 
 def add(op1, op2):
     asm_lines.append(f"mov eax, [{op1}]")
@@ -143,20 +189,47 @@ def if_lt(op1, op2, label_true, label_false):
 with open('code.bbplc') as f:
     lines = f.readlines()
 
-code = []
-for line in lines: 
-    line = line.strip()
-    if line:
-        code.append(line)
-
+code = [line.strip() for line in lines if line.strip()]
 
 label_counter = 0
 for line in code:
     words = line.split()
     cmd = words[0]
-
     if cmd == "DECLARE":
-        declare(words[1], words[2], words[4])
+        var_type, var_name, var_value = parse_declare(line)
+        if var_type:
+            declare(var_type, var_name, var_value)
+
+for line in code:
+    words = line.split()
+    if not words:
+        continue
+
+    cmd = words[0]
+    if cmd in ("TOSTR", "TOINT"):
+        name = words[1]
+
+        if name not in buffers_created:
+            buf_index = 0
+            buffers_created[name] = [buf_index]
+        else:
+            buf_index = max(buffers_created[name]) + 1
+            buffers_created[name].append(buf_index)
+
+        buf_name = f"{name}_str_{buf_index}"
+
+        if buf_name not in variables:
+            declares.append(f"{buf_name}: times 20 db 0 ; buffer for {name}")
+            variables[buf_name] = "tostr_buffer"
+
+asm_lines.extend(declares)
+asm_lines.append("start:")
+
+for line in code:
+    words = line.split()
+    cmd = words[0]
+    if cmd == "DECLARE":
+        continue
     elif cmd == "ADD":
         add(words[1], words[2])
     elif cmd == "SUB":
