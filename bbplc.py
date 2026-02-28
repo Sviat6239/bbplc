@@ -1,4 +1,4 @@
-grammar = ["DECLARE", "PRINT", "ADD", "SUB", "IF", "THEN", "ELSE", "ENDIF", "TOSTR", "TOINT", "LABEL","GOTO"]
+grammar = ["DECLARE", "PRINT", "ADD", "SUB", "MUL","DIV","SQR","POW", "IF", "THEN", "ELSE", "ENDIF", "TOSTR", "TOINT", "LABEL","GOTO"]
 dataTypes = ["DB", "DW", "DD", "DP", "DQ", "DT"]
 
 code = []
@@ -32,11 +32,45 @@ def toint(name):
 def print(name):
     pass
 
-def add(perand1, operand2):
-    pass
+def add(op1, op2):
+    asm_lines.append(f"mov eax, [{op1}]")
+    asm_lines.append(f"add eax, [{op2}]")
+    asm_lines.append(f"mov [{op1}], eax")
 
-def sub(operand1, operand2):
-    pass
+def sub(op1, op2):
+    asm_lines.append(f"mov eax, [{op1}]")
+    asm_lines.append(f"sub eax, [{op2}]")
+    asm_lines.append(f"mov [{op1}], eax")
+
+def mul(op1, op2):
+    asm_lines.append(f"mov eax, [{op1}]")
+    asm_lines.append(f"imul eax, [{op2}]")
+    asm_lines.append(f"mov [{op1}], eax")
+
+def div(op1, op2):
+    asm_lines.append(f"mov eax, [{op1}]")
+    asm_lines.append(f"cdq")
+    asm_lines.append(f"idiv dword [{op2}]")
+    asm_lines.append(f"mov [{op1}], eax")
+
+def sqr(op1):
+    asm_lines.append(f"mov eax, [{op1}]")
+    asm_lines.append(f"imul eax, eax")
+    asm_lines.append(f"mov [{op1}], eax")
+
+def pow(op1, op2):
+    asm_lines.append(f"mov eax, [{op1}]")
+    asm_lines.append(f"mov ecx, [{op2}]")
+    asm_lines.append(f"mov ebx, eax")
+    asm_lines.append(f"cmp ecx, 0")
+    asm_lines.append(f"je .pow_done")
+    asm_lines.append(f"dec ecx")
+    asm_lines.append(f".pow_loop:")
+    asm_lines.append(f"imul eax, ebx")
+    asm_lines.append(f"dec ecx")
+    asm_lines.append(f"jnz .pow_loop")
+    asm_lines.append(f".pow_done:")
+    asm_lines.append(f"mov [{op1}], eax")
 
 def if_word():
     pass
@@ -48,6 +82,12 @@ def then_word():
     pass
 
 def endif_word():
+    pass
+
+def label(name):
+    pass
+
+def goto(name):
     pass
 
 
